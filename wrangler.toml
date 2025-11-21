@@ -9,7 +9,3 @@ OPENAI_API_KEY = ""
 RUNWARE_API_KEY = ""
 REPLICATE_API_KEY = ""
 
-[[r2_buckets]]
-binding = "UPLOADS"
-bucket_name = "snapr-uploads"
-
