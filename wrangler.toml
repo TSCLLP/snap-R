@@ -1,8 +1,5 @@
 name = "snapr-gpt"
-main = ".open-next/server-functions/default/index.mjs"
 compatibility_date = "2024-10-01"
-compatibility_flags = ["nodejs_compat"]
-
 pages_build_output_dir = ".open-next"
 
 [vars]
@@ -16,10 +13,3 @@ REPLICATE_API_KEY = ""
 binding = "UPLOADS"
 bucket_name = "snapr-uploads"
 
-[[queues.producers]]
-queue = "image-jobs"
-binding = "IMAGE_JOBS"
-
-[[queues.consumers]]
-queue = "image-jobs"
-script_name = "image-jobs-consumer"
