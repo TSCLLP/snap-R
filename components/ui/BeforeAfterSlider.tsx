@@ -8,7 +8,7 @@ interface Props {
   after: string;
 }
 
-export default function BeforeAfterSlider({ before, after }: Props) {
+export function BeforeAfterSlider({ before, after }: Props) {
   const [value, setValue] = useState(50);
 
   return (
