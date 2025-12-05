@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import PhotographerDashboard from "@/components/dashboards/photographer";
 import AgentDashboard from "@/components/dashboards/agent";
-import ChooseRole from "../onboarding/role";
+import ChooseRole from "@/app/(authenticated)/onboarding/role";
 
 export default async function Dashboard() {
   const supabase = await createClient();
