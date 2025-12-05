@@ -22,6 +22,23 @@ export default function OnboardingPage() {
     'Other',
   ];
 
+  function normalizeRole(raw: string): "photographer" | "agent" {
+    switch (raw) {
+      case "Photographer":
+      case "Real Estate Photographer":
+        return "photographer";
+      case "Real Estate Agent":
+      case "Broker":
+      case "Property Owner":
+      case "Property Manager":
+      case "Brokerage House":
+      case "Other":
+      case "Others":
+      default:
+        return "agent";
+    }
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name || !role) return;
@@ -30,12 +47,21 @@ export default function OnboardingPage() {
     const { data: { user } } = await supabase.auth.getUser();
     
     if (user) {
+      const normalizedRole = normalizeRole(role);
+      
       await supabase.from('users').update({
         name,
         company,
         role,
         onboarded: true,
       }).eq('id', user.id);
+
+      // Set normalized role in profiles table
+      await fetch("/api/user/set-role", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: normalizedRole }),
+      });
     }
     
     router.push('/dashboard');

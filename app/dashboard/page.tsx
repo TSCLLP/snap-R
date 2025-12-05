@@ -14,10 +14,15 @@ export default async function Dashboard() {
     .eq("id", user.id)
     .single();
 
-  if (!profile?.role) return <ChooseRole />;
+  // Fallback for old users with no stored role:
+  if (!profile?.role) {
+    return <ChooseRole />;
+  }
 
-  if (profile.role === "photographer") return <PhotographerDashboard />;
-  if (profile.role === "agent") return <AgentDashboard />;
+  if (profile.role === "photographer") {
+    return <PhotographerDashboard />;
+  }
 
-  return <ChooseRole />;
+  // Default: treat everything else as agent/broker/owner style
+  return <AgentDashboard />;
 }
