@@ -1,4 +1,5 @@
 export const dynamic = 'force-dynamic';
+
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { processEnhancement, ToolId, TOOL_CREDITS } from '@/lib/ai/router';
@@ -9,65 +10,96 @@ export const maxDuration = 120;
 
 export async function POST(request: NextRequest) {
   const startTime = Date.now();
+
   try {
     const { imageId, toolId, options = {} } = await request.json();
-    console.log('\n[API] ========== ENHANCE ==========');    
+    console.log('\n[API] ========== ENHANCE ==========');
     console.log('[API] Tool:', toolId, 'Image:', imageId);
-    
+
     const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
-    
+
+    // --- BEGIN REGION BINDING (US DEFAULT) ---
+    const region = 'US';
+    (options as any).region = region;
+    // --- END REGION BINDING ---
+
     const creditsRequired = TOOL_CREDITS[toolId as ToolId];
     if (!creditsRequired) {
-      return NextResponse.json({ error: `Unknown tool: ${toolId}` }, { status: 400 });
+      return NextResponse.json(
+        { error: `Unknown tool: ${toolId}` },
+        { status: 400 },
+      );
     }
-    
-    // Check user's credits
+
+    // Check user's credits & role
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
-      .select('credits')
+      .select('credits, user_role')
       .eq('id', user.id)
       .single();
-      
+
     if (profileError || !profile) {
-      return NextResponse.json({ error: 'Could not fetch user profile' }, { status: 500 });
+      return NextResponse.json(
+        { error: 'Could not fetch user profile' },
+        { status: 500 },
+      );
     }
-    
+
     if ((profile.credits || 0) < creditsRequired) {
-      return NextResponse.json({ 
-        error: 'Insufficient credits', 
-        creditsRequired,
-        creditsAvailable: profile.credits || 0
-      }, { status: 402 });
+      return NextResponse.json(
+        {
+          error: 'Insufficient credits',
+          creditsRequired,
+          creditsAvailable: profile.credits || 0,
+        },
+        { status: 402 },
+      );
     }
-    
+
+    // --- BEGIN ROLE BINDING (PHOTOGRAPHER / AGENT / BROKER) ---
+    const userRole =
+      (profile.user_role as 'photographer' | 'agent' | 'broker') ||
+      'photographer';
+    (options as any).userRole = userRole;
+    // --- END ROLE BINDING ---
+
     const { data: photo, error: photoError } = await supabase
       .from('photos')
       .select('*, listings(title)')
       .eq('id', imageId)
       .single();
-      
+
     if (photoError || !photo) {
       return NextResponse.json({ error: 'Photo not found' }, { status: 404 });
     }
-    
+
     const { data: signedUrlData } = await supabase.storage
       .from('raw-images')
       .createSignedUrl(photo.raw_url, 3600);
-      
+
     if (!signedUrlData?.signedUrl) {
-      return NextResponse.json({ error: 'Could not get image URL' }, { status: 500 });
+      return NextResponse.json(
+        { error: 'Could not get image URL' },
+        { status: 500 },
+      );
     }
-    
+
     console.log('[API] Processing...');
-    const result = await processEnhancement(toolId as ToolId, signedUrlData.signedUrl, options);
-    
+    const result = await processEnhancement(
+      toolId as ToolId,
+      signedUrlData.signedUrl,
+      options,
+    );
+
     const processingTime = Date.now() - startTime;
-    
+
     // Log API cost with full details
     await logApiCost({
       userId: user.id,
@@ -81,48 +113,52 @@ export async function POST(request: NextRequest) {
         imageId,
         options,
         userEmail: user.email,
+        userRole,
       },
     });
 
     if (!result.success || !result.enhancedUrl) {
-      return NextResponse.json({ error: result.error || 'Enhancement failed' }, { status: 500 });
+      return NextResponse.json(
+        { error: result.error || 'Enhancement failed' },
+        { status: 500 },
+      );
     }
-    
+
     // Deduct credits after successful enhancement
     const { error: deductError } = await supabase
       .from('profiles')
       .update({ credits: (profile.credits || 0) - creditsRequired })
       .eq('id', user.id);
-      
+
     if (deductError) {
       console.error('[API] Credit deduction failed:', deductError);
     }
-    
+
     let finalUrl = result.enhancedUrl;
     let storagePath: string | null = null;
-    
+
     try {
       const enhancedResponse = await fetch(result.enhancedUrl);
       if (enhancedResponse.ok) {
         const enhancedBuffer = await enhancedResponse.arrayBuffer();
         storagePath = `enhanced/${user.id}/${photo.listing_id}/${Date.now()}-${toolId}.jpg`;
-        
+
         const { error: uploadError } = await supabase.storage
           .from('raw-images')
           .upload(storagePath, enhancedBuffer, {
             contentType: 'image/jpeg',
             upsert: true,
           });
-          
+
         if (!uploadError) {
           const { data: enhancedSignedUrl } = await supabase.storage
             .from('raw-images')
             .createSignedUrl(storagePath, 3600);
-            
+
           if (enhancedSignedUrl?.signedUrl) {
             finalUrl = enhancedSignedUrl.signedUrl;
           }
-          
+
           await supabase
             .from('photos')
             .update({
@@ -137,14 +173,14 @@ export async function POST(request: NextRequest) {
     } catch (saveError: any) {
       console.warn('[API] Save error:', saveError.message);
     }
-    
+
     // Send processing complete email (non-blocking)
     const listingTitle = (photo as any).listings?.title || 'Your property';
     sendProcessingAlert(user.email || '', listingTitle).catch(() => {});
-    
+
     const duration = Date.now() - startTime;
     console.log('[API] ✅ Complete in', (duration / 1000).toFixed(1), 's');
-    
+
     return NextResponse.json({
       success: true,
       enhancedUrl: finalUrl,
@@ -162,7 +198,7 @@ export async function POST(request: NextRequest) {
 
 async function sendProcessingAlert(userEmail: string, listingTitle: string) {
   if (!userEmail || !process.env.RESEND_API_KEY) return;
-  
+
   try {
     const resend = new Resend(process.env.RESEND_API_KEY);
     await resend.emails.send({

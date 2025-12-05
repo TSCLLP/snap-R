@@ -1,9 +1,3 @@
-/**
- * SnapR AI Enhancement Router
- * ============================
- * 15 tools: 10 with presets, 5 without (one-click)
- */
-
 import {
   skyReplacement,
   virtualTwilight,
@@ -21,6 +15,9 @@ import {
   lensCorrection,
   autoEnhance,
 } from './providers/replicate';
+import { createClient } from '@/lib/supabase/server';
+import { applyWatermark } from '@/lib/utils/watermark';
+import { getPolicy } from '@/lib/ai/policy';
 
 export type ToolId =
   // EXTERIOR (4)
@@ -78,24 +75,44 @@ export async function processEnhancement(
   options: {
     preset?: string;
     prompt?: string;
+    region?: string;
+    userRole?: 'photographer' | 'agent' | 'broker';
   } = {},
 ): Promise<EnhancementResult> {
   const startTime = Date.now();
+
+  const region = options.region || 'US';
+  const role = (options.userRole ||
+    'photographer') as 'photographer' | 'agent' | 'broker';
+
+  const policy = getPolicy(region, role);
 
   console.log('[Router] ===================================');
   console.log('[Router] Tool:', toolId);
   console.log('[Router] Preset:', options.preset || 'none');
   console.log('[Router] Custom Prompt:', options.prompt ? 'YES' : 'NO');
+  console.log('[Router] Region:', region);
+  console.log('[Router] UserRole:', role);
+  console.log('[Router] ToneProfile:', policy.toneProfile);
+  console.log('[Router] Watermark.Staging:', policy.watermark.staging);
   console.log('[Router] ===================================');
 
   try {
+    // Apply MLS-safe tone only when policy says mls-natural
+    if (policy.toneProfile === 'mls-natural') {
+      (options as any).saturationAdjust = -0.08;
+      (options as any).contrastAdjust = 0.05;
+      (options as any).shadowLift = 0.04;
+      (options as any).whiteBalanceBias = 'cool-neutral';
+    }
+
     let enhancedUrl: string;
 
     switch (toolId) {
       // ========================================
       // TOOLS WITH PRESETS (10) - pass prompt
       // ========================================
-      
+
       case 'sky-replacement':
         enhancedUrl = await skyReplacement(imageUrl, options.prompt);
         break;
@@ -164,6 +181,44 @@ export async function processEnhancement(
         throw new Error(`Unknown tool: ${toolId}`);
     }
 
+    // Enforce watermark ONLY if policy requires it for staging
+    if (
+      toolId === 'virtual-staging' &&
+      policy.watermark.staging === 'mandatory'
+    ) {
+      try {
+        const processedImageResponse = await fetch(enhancedUrl);
+        if (processedImageResponse.ok) {
+          const imageBuffer = await processedImageResponse.arrayBuffer();
+          const stampedImage = await applyWatermark(
+            Buffer.from(imageBuffer),
+            policy.watermark.text || 'Virtually Staged',
+          );
+
+          const newKey = `staged/${Date.now()}-staged.jpg`;
+          const supabase = await createClient();
+          const { error: uploadError } = await supabase.storage
+            .from('raw-images')
+            .upload(newKey, stampedImage, {
+              contentType: 'image/jpeg',
+              upsert: true,
+            });
+
+          if (!uploadError) {
+            const { data: signedUrl } = await supabase.storage
+              .from('raw-images')
+              .createSignedUrl(newKey, 3600);
+
+            if (signedUrl?.signedUrl) {
+              enhancedUrl = signedUrl.signedUrl;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[Router] Watermark insert failed:', e);
+      }
+    }
+
     const duration = Date.now() - startTime;
     console.log(`[Router] ✅ SUCCESS in ${(duration / 1000).toFixed(1)}s`);
 
@@ -175,7 +230,10 @@ export async function processEnhancement(
     };
   } catch (error: any) {
     const duration = Date.now() - startTime;
-    console.error(`[Router] ❌ FAILED after ${(duration / 1000).toFixed(1)}s:`, error.message);
+    console.error(
+      `[Router] ❌ FAILED after ${(duration / 1000).toFixed(1)}s:`,
+      error.message,
+    );
 
     return {
       success: false,
