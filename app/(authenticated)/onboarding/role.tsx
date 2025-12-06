@@ -5,12 +5,23 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 
 export default function ChooseRole() {
+  const [role, setRole] = useState<"photographer" | "agent" | "">("");
   const router = useRouter();
-  const [role, setRole] = useState("");
+
+  const handleContinue = async () => {
+    if (!role) return;
+    await fetch("/api/user/set-role", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role }),
+    });
+
+    router.push("/dashboard");
+  };
 
   return (
     <div className="flex flex-col items-center mt-20 space-y-6">
-      <h1 className="text-xl font-bold">Choose your role</h1>
+      <h1 className="text-xl font-bold">Choose Your Role</h1>
 
       <div className="flex gap-6">
         <button
@@ -30,13 +41,7 @@ export default function ChooseRole() {
 
       <Button
         disabled={!role}
-        onClick={async () => {
-          await fetch("/api/user/set-role", {
-            method: "POST",
-            body: JSON.stringify({ role }),
-          });
-          router.push("/dashboard");
-        }}
+        onClick={handleContinue}
       >
         Continue →
       </Button>

@@ -22,18 +22,10 @@ export default function OnboardingPage() {
     'Other',
   ];
 
-  function normalizeRole(raw: string): "photographer" | "agent" {
+  function normalizeRole(raw: string) {
     switch (raw) {
       case "Photographer":
-      case "Real Estate Photographer":
         return "photographer";
-      case "Real Estate Agent":
-      case "Broker":
-      case "Property Owner":
-      case "Property Manager":
-      case "Brokerage House":
-      case "Other":
-      case "Others":
       default:
         return "agent";
     }
