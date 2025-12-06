@@ -25,6 +25,7 @@ export default function OnboardingPage() {
   function normalizeRole(raw: string) {
     switch (raw) {
       case "Photographer":
+      case "Real Estate Photographer":
         return "photographer";
       default:
         return "agent";
