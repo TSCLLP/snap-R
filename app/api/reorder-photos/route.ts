@@ -3,13 +3,30 @@ import { createClient } from '@/lib/supabase/server';
 
 export async function POST(req: NextRequest) {
   try {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const { listingId, photoOrder } = await req.json();
 
     if (!listingId || !photoOrder || !Array.isArray(photoOrder)) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
 
-    const supabase = await createClient();
+    // Verify user owns this listing
+    const { data: listing } = await supabase
+      .from('listings')
+      .select('id')
+      .eq('id', listingId)
+      .eq('user_id', user.id)
+      .single();
+
+    if (!listing) {
+      return NextResponse.json({ error: 'Listing not found' }, { status: 404 });
+    }
 
     // Update each photo's display_order
     const updates = photoOrder.map((photoId, index) => 
