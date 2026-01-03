@@ -80,7 +80,7 @@ export async function prepareListing(
     // ========================================
     // PHASE 2: ANALYZE PHOTOS (GPT-4 Vision)
     // ========================================
-    reportProgress(onProgress, listingId, 'analyzing', `Analyzing ${photos.length} photos with AI vision...`, startTime);
+    reportProgress(onProgress, listingId, 'analyzing', `Analyzing ${photos.length} photos with AI vision...`, startTime, { total: photos.length, analyzed: 0, processed: 0 });
     
     const analyses = await analyzePhotos(photos, {
       maxConcurrency: options.prioritizeSpeed ? 8 : 5,
@@ -91,7 +91,7 @@ export async function prepareListing(
     // ========================================
     // PHASE 3: DETERMINE LOCKED PRESETS
     // ========================================
-    reportProgress(onProgress, listingId, 'strategizing', 'Locking presets for consistency...', startTime);
+    reportProgress(onProgress, listingId, 'strategizing', 'Locking presets for consistency...', startTime, { total: photos.length, analyzed: photos.length, processed: 0 });
     
     const lockedPresets = determineLockedPresets(analyses);
     
@@ -105,7 +105,7 @@ export async function prepareListing(
     // ========================================
     // PHASE 4: BUILD STRATEGY
     // ========================================
-    reportProgress(onProgress, listingId, 'strategizing', 'Building enhancement strategy...', startTime);
+    reportProgress(onProgress, listingId, 'strategizing', 'Building enhancement strategy...', startTime, { total: photos.length, analyzed: photos.length, processed: 0 });
     
     const strategy = buildListingStrategy(listingId, analyses);
     
@@ -114,7 +114,7 @@ export async function prepareListing(
     // ========================================
     // PHASE 5: PROCESS PHOTOS (PREMIUM)
     // ========================================
-    reportProgress(onProgress, listingId, 'processing', 'Enhancing photos with premium engine...', startTime);
+    reportProgress(onProgress, listingId, 'processing', 'Enhancing photos with premium engine...', startTime, { total: photos.length, analyzed: photos.length, processed: 0 });
     
     // Order by priority (hero first, then critical, etc.)
     strategy.photoStrategies = orderByPriority(strategy.photoStrategies);
@@ -132,7 +132,7 @@ export async function prepareListing(
     // PHASE 6: CONSISTENCY PASS
     // ========================================
     if (CONFIG.enableConsistencyPass) {
-      reportProgress(onProgress, listingId, 'consistency_pass', 'Verifying consistency...', startTime);
+      reportProgress(onProgress, listingId, 'consistency_pass', 'Verifying consistency...', startTime, { total: photos.length, analyzed: photos.length, processed: results.length });
       
       const consistency = await analyzeConsistency(results);
       console.log(`\n${getConsistencyReport(consistency.metrics, consistency.adjustments, consistency.consistencyScore)}\n`);
@@ -141,7 +141,7 @@ export async function prepareListing(
     // ========================================
     // PHASE 7: VALIDATION
     // ========================================
-    reportProgress(onProgress, listingId, 'validating', 'Validating results...', startTime);
+    reportProgress(onProgress, listingId, 'validating', 'Validating results...', startTime, { total: photos.length, analyzed: photos.length, processed: results.length });
     
     let validations;
     if (CONFIG.enableFullValidation) {
@@ -342,23 +342,22 @@ function reportProgress(
   listingId: string,
   status: ProcessingStatus,
   message: string,
-  startTime: number
+  startTime: number,
+  photoStats?: { total: number; analyzed: number; processed: number }
 ): void {
   if (onProgress) {
     onProgress({
       listingId,
       status,
       currentPhase: message,
-      totalPhotos: 0,
-      analyzedPhotos: 0,
-      processedPhotos: 0,
+      totalPhotos: photoStats?.total || 0,
+      analyzedPhotos: photoStats?.analyzed || 0,
+      processedPhotos: photoStats?.processed || 0,
       estimatedTimeRemaining: 0,
       startedAt: new Date(startTime).toISOString(),
       messages: [message],
     });
   }
-  
-  console.log(`[ListingEngine] ${message}`);
 }
 
 // ============================================
