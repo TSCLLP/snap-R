@@ -549,6 +549,17 @@ export function StudioClient({ listingId, userRole, showMlsFeatures = false, cre
         </aside>
 
         <main className="flex-1 flex flex-col p-4 min-w-0">
+          {listingStatus && listingStatus.status !== "draft" && listingStatus.status !== "preparing" && (
+            <ConfidenceBanner
+              status={listingStatus.status as "prepared" | "needs_review" | "draft" | "preparing"}
+              confidenceScore={listingStatus.confidence}
+              totalPhotos={photos.length}
+              enhancedPhotos={photos.filter(p => p.enhanced_url).length}
+              flaggedPhotos={flaggedPhotos.length}
+              onExport={() => setShowMlsExport(true)}
+              onShare={() => setShowShareModal(true)}
+            />
+          )}
           {selectedPhoto ? (
             <>
               <div className="flex-1 relative flex items-center justify-center bg-[#0A0A0A] rounded-xl overflow-hidden min-h-0">
