@@ -8,6 +8,8 @@ import { HumanEditRequestModal } from "./human-edit-request";
 import { MlsExportModal } from "./mls-export-modal";
 import { AdjustmentPanel } from "./adjustment-panel";
 import { StylePromptModal } from "./style-prompt-modal";
+import { PreparationOverlay } from './preparation-overlay';
+import { ConfidenceBanner } from './confidence-banner';
 import Link from 'next/link';
 import { ArrowLeft, Upload, Sun, Moon, Leaf, Trash2, Sofa, Sparkles, Wand2, Loader2, ChevronDown, ChevronUp, Check, X, Download, Share2, Copy, LogOut, FileArchive, UserCheck, Flame, Tv, Lightbulb, PanelTop, Waves, Move, Circle, Palette, Brain, Snowflake, Flower2, Eraser, Zap, Rocket, CheckCircle, AlertCircle, Star, Eye, RefreshCw, History } from 'lucide-react';
 
@@ -144,6 +146,7 @@ export function StudioClient({ listingId, userRole, showMlsFeatures = false, cre
   const [showApprovalModal, setShowApprovalModal] = useState(false);
   const [showMlsExport, setShowMlsExport] = useState(false);
   const [preparingListing, setPreparingListing] = useState(false);
+  const [showPreparationOverlay, setShowPreparationOverlay] = useState(false);
   const [listingStatus, setListingStatus] = useState<{ status: string; confidence: number; heroPhotoId: string | null } | null>(null);
   const [prepareProgress, setPrepareProgress] = useState<{ phase: string; message: string } | null>(null);
   const [showReviewPanel, setShowReviewPanel] = useState(false);
@@ -303,55 +306,25 @@ export function StudioClient({ listingId, userRole, showMlsFeatures = false, cre
 
   const handleShare = () => { setShareLink(''); setShowShareModal(true); };
 
-  const handlePrepareListing = async () => {
-    if (preparingListing) return;
-    setPreparingListing(true);
-    setPrepareProgress({ phase: 'Starting', message: 'Initializing AI engine...' });
-    try {
-      const phases = [
-        { phase: 'Analyzing', message: 'AI is analyzing your photos...' },
-        { phase: 'Planning', message: 'Building enhancement strategy...' },
-        { phase: 'Enhancing', message: 'Applying premium enhancements...' },
-        { phase: 'Finalizing', message: 'Validating results...' },
-      ];
-      let phaseIndex = 0;
-      const progressInterval = setInterval(() => {
-        if (phaseIndex < phases.length) {
-          setPrepareProgress(phases[phaseIndex]);
-          phaseIndex++;
-        }
-      }, 8000);
-      const res = await fetch('/api/listing/prepare', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ listingId }),
-      });
-      clearInterval(progressInterval);
-      const data = await res.json();
-      if (data.success) {
-        setListingStatus({ status: data.status, confidence: data.stats?.overallConfidence || 0, heroPhotoId: data.heroPhotoId });
-        setPrepareProgress({ phase: 'Complete', message: 'Listing prepared successfully!' });
-        setNewPhotosAfterPrepare(false);
-        // Set flagged photos if any
-        if (data.stats?.flaggedPhotos) {
-          setFlaggedPhotos(data.stats.flaggedPhotos);
-        } else {
-          setFlaggedPhotos([]);
-        }
-        setTimeout(() => setPrepareProgress(null), 3000);
-        loadData();
-        // Trigger notification
-        sendPrepareNotification(data);
-      } else {
-        setPrepareProgress(null);
-        alert('Preparation failed: ' + (data.error || 'Unknown error'));
-      }
-    } catch (error: any) {
-      setPrepareProgress(null);
-      alert('Error: ' + error.message);
-    } finally {
-      setPreparingListing(false);
-    }
+  const handlePrepareListing = () => {
+    if (preparingListing || photos.length === 0) return;
+    setShowPreparationOverlay(true);
+  };
+
+  const handlePreparationComplete = (result: any) => {
+    setShowPreparationOverlay(false);
+    setListingStatus({ 
+      status: result.status === 'prepared' ? 'prepared' : result.status, 
+      confidence: result.confidenceScore || 0, 
+      heroPhotoId: result.heroPhotoId || null 
+    });
+    setNewPhotosAfterPrepare(false);
+    loadData();
+    sendPrepareNotification(result);
+  };
+
+  const handlePreparationCancel = () => {
+    setShowPreparationOverlay(false);
   };
 
   const fetchListingStatus = async () => {
@@ -666,6 +639,15 @@ export function StudioClient({ listingId, userRole, showMlsFeatures = false, cre
       {showMlsExport && completedPhotos.length > 0 && <MlsExportModal photos={completedPhotos} listingTitle={listing?.title} listingAddress={listing?.address} onClose={() => setShowMlsExport(false)} />}
       {showStylePrompt && <StylePromptModal adjustments={adjustments} onJustThisPhoto={handleJustThisPhoto} onApplyToAll={handleApplyStyleToAll} />}
       {showHumanEditModal && selectedPhoto && <HumanEditRequestModal listingId={listingId} photoUrl={selectedPhoto?.signedUrl || ""} onClose={() => setShowHumanEditModal(false)} />}
+      {showPreparationOverlay && (
+        <PreparationOverlay
+          listingId={listingId}
+          listingTitle={listing?.title || "Listing"}
+          photos={photos.map(p => ({ id: p.id, thumbnailUrl: p.signedUrl || p.url }))}
+          onComplete={handlePreparationComplete}
+          onCancel={handlePreparationCancel}
+        />
+      )}
     </div>
   );
 }
