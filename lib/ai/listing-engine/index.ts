@@ -80,7 +80,7 @@ export async function prepareListing(
     // ========================================
     // PHASE 2: ANALYZE PHOTOS (GPT-4 Vision)
     // ========================================
-    reportProgress(onProgress, listingId, 'analyzing', `Analyzing ${photos.length} photos with AI vision...`, startTime, { total: photos.length, analyzed: 0, processed: 0 });
+    reportProgress(onProgress, listingId, 'analyzing', `Analyzing ${photos.length} photos with SnapR...`, startTime, { total: photos.length, analyzed: 0, processed: 0 });
     
     const analyses = await analyzePhotos(photos, {
       maxConcurrency: options.prioritizeSpeed ? 8 : 5,

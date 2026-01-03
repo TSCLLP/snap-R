@@ -654,7 +654,7 @@ export function StudioClient({ listingId, userRole, showMlsFeatures = false, cre
         <PreparationOverlay
           listingId={listingId}
           listingTitle={listing?.title || "Listing"}
-          photos={photos.map(p => ({ id: p.id, thumbnailUrl: p.signedUrl || p.url }))}
+          photos={photos.map(p => ({ id: p.id, thumbnailUrl: p.signedRawUrl || p.signedProcessedUrl || p.raw_url }))}
           onComplete={handlePreparationComplete}
           onCancel={handlePreparationCancel}
         />

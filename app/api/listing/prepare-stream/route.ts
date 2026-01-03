@@ -184,8 +184,8 @@ export async function POST(request: NextRequest) {
 
         // Progress callback
         const onProgress = (progress: ProcessingProgress) => {
-          const userPhase = mapPhase(progress.currentPhase);
-          const calculatedProgress = calculateProgress(progress.currentPhase, { current: progress.processedPhotos, total: progress.totalPhotos });
+          const userPhase = mapPhase(progress.status);
+          const calculatedProgress = calculateProgress(progress.status, { current: progress.processedPhotos, total: progress.totalPhotos });
           
           // Only send if meaningful change
           if (userPhase !== lastPhase || calculatedProgress > lastProgress + 5) {
