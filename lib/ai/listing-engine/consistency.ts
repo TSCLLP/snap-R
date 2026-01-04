@@ -1,23 +1,23 @@
 /**
- * SnapR AI Engine V2 - Consistency Pass
+ * SnapR AI Engine V3 - Consistency Pass
  * ======================================
  * Ensures visual consistency across all listing photos
+ * 
+ * ALIGNED WITH: V3 types - uses PhotoExecutionResult directly
  */
 
-import { PhotoProcessingResult, ConsistencyMetrics, ConsistencyAdjustment } from './types';
+import { PhotoExecutionResult } from './batch-processor';
+import { ConsistencyMetrics, ConsistencyAdjustment } from './types';
 
 // ============================================
 // CONFIGURATION
 // ============================================
 
 const CONFIG = {
-  // Thresholds for adjustment (how different before we adjust)
   brightnessThreshold: 15,
   contrastThreshold: 10,
   warmthThreshold: 10,
   saturationThreshold: 10,
-  
-  // Maximum adjustment values
   maxBrightnessAdjust: 20,
   maxContrastAdjust: 15,
   maxWarmthAdjust: 15,
@@ -28,15 +28,8 @@ const CONFIG = {
 // MAIN CONSISTENCY FUNCTION
 // ============================================
 
-/**
- * Analyze and optionally apply consistency adjustments to photos
- * 
- * Note: Currently this returns adjustment recommendations.
- * Actual application would require an additional color grading model.
- * For V2, we rely on the enhancement models to maintain reasonable consistency.
- */
 export async function analyzeConsistency(
-  results: PhotoProcessingResult[]
+  results: PhotoExecutionResult[]
 ): Promise<{
   metrics: ConsistencyMetrics;
   adjustments: ConsistencyAdjustment[];
@@ -46,7 +39,9 @@ export async function analyzeConsistency(
   console.log(`[Consistency] Analyzing ${results.length} photos`);
   
   // Filter to only successful results
-  const successfulResults = results.filter(r => r.success && r.enhancedUrl);
+  const successfulResults = results.filter(r => 
+    (r.executionStatus === 'success' || r.executionStatus === 'partial') && r.enhancedUrl
+  );
   
   if (successfulResults.length < 2) {
     return {
@@ -57,14 +52,6 @@ export async function analyzeConsistency(
     };
   }
   
-  // In a full implementation, we would:
-  // 1. Analyze each image's histogram for brightness/contrast
-  // 2. Analyze color temperature (warmth)
-  // 3. Analyze saturation levels
-  // 4. Calculate average metrics
-  // 5. Determine adjustments needed for each photo
-  
-  // For V2, we use estimated metrics based on the enhancement tools applied
   const metrics = estimateMetrics(successfulResults);
   const adjustments = calculateAdjustments(successfulResults, metrics);
   const consistencyScore = calculateConsistencyScore(adjustments);
@@ -92,14 +79,11 @@ function getDefaultMetrics(): ConsistencyMetrics {
   };
 }
 
-function estimateMetrics(results: PhotoProcessingResult[]): ConsistencyMetrics {
-  // Estimate based on tools applied
-  // In production, this would use actual image analysis
-  
+function estimateMetrics(results: PhotoExecutionResult[]): ConsistencyMetrics {
   let totalBrightness = 0;
   let totalContrast = 0;
-  let totalWarmth = 50; // Neutral
-  let totalSaturation = 50; // Neutral
+  let totalWarmth = 0;
+  let totalSaturation = 0;
   
   for (const result of results) {
     let brightness = 50;
@@ -107,7 +91,6 @@ function estimateMetrics(results: PhotoProcessingResult[]): ConsistencyMetrics {
     let warmth = 50;
     let saturation = 50;
     
-    // Adjust estimates based on tools applied
     for (const tool of result.toolsApplied) {
       switch (tool) {
         case 'hdr':
@@ -118,7 +101,7 @@ function estimateMetrics(results: PhotoProcessingResult[]): ConsistencyMetrics {
           break;
         case 'virtual-twilight':
           brightness -= 15;
-          warmth += 15; // Warm glow from windows
+          warmth += 15;
           saturation += 5;
           break;
         case 'sky-replacement':
@@ -132,9 +115,6 @@ function estimateMetrics(results: PhotoProcessingResult[]): ConsistencyMetrics {
         case 'flash-fix':
           brightness -= 5;
           contrast += 5;
-          break;
-        case 'color-balance':
-          warmth += 10; // Assuming warm preset
           break;
       }
     }
@@ -160,18 +140,16 @@ function estimateMetrics(results: PhotoProcessingResult[]): ConsistencyMetrics {
 // ============================================
 
 function calculateAdjustments(
-  results: PhotoProcessingResult[],
+  results: PhotoExecutionResult[],
   targetMetrics: ConsistencyMetrics
 ): ConsistencyAdjustment[] {
   const adjustments: ConsistencyAdjustment[] = [];
   
   for (const result of results) {
-    if (!result.success) continue;
+    if (result.executionStatus === 'failed') continue;
     
-    // Estimate this photo's current metrics
     const photoMetrics = estimateSinglePhotoMetrics(result);
     
-    // Calculate needed adjustments
     const brightnessAdj = calculateSingleAdjustment(
       photoMetrics.brightness,
       targetMetrics.averageBrightness,
@@ -200,7 +178,6 @@ function calculateAdjustments(
       CONFIG.maxSaturationAdjust
     );
     
-    // Only add if adjustments are needed
     if (brightnessAdj !== 0 || contrastAdj !== 0 || warmthAdj !== 0 || saturationAdj !== 0) {
       adjustments.push({
         photoId: result.photoId,
@@ -215,7 +192,7 @@ function calculateAdjustments(
   return adjustments;
 }
 
-function estimateSinglePhotoMetrics(result: PhotoProcessingResult): {
+function estimateSinglePhotoMetrics(result: PhotoExecutionResult): {
   brightness: number;
   contrast: number;
   warmth: number;
@@ -266,12 +243,10 @@ function calculateSingleAdjustment(
 ): number {
   const diff = target - current;
   
-  // Only adjust if difference exceeds threshold
   if (Math.abs(diff) < threshold) {
     return 0;
   }
   
-  // Calculate adjustment, capped at max
   const adjustment = Math.sign(diff) * Math.min(Math.abs(diff), maxAdjust);
   return Math.round(adjustment);
 }
@@ -285,7 +260,6 @@ function calculateConsistencyScore(adjustments: ConsistencyAdjustment[]): number
     return 100;
   }
   
-  // Calculate average adjustment magnitude
   let totalMagnitude = 0;
   
   for (const adj of adjustments) {
@@ -296,8 +270,6 @@ function calculateConsistencyScore(adjustments: ConsistencyAdjustment[]): number
   }
   
   const avgMagnitude = totalMagnitude / (adjustments.length * 4);
-  
-  // Convert to score (0 magnitude = 100%, 20 magnitude = 0%)
   const score = Math.max(0, 100 - (avgMagnitude * 5));
   
   return Math.round(score);
@@ -311,35 +283,6 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-// ============================================
-// FUTURE: ACTUAL IMAGE ANALYSIS
-// ============================================
-
-/**
- * In a future version, this would use actual image analysis:
- * 
- * async function analyzeImageMetrics(imageUrl: string): Promise<{
- *   brightness: number;
- *   contrast: number;
- *   warmth: number;
- *   saturation: number;
- * }> {
- *   // Use Sharp or similar library to analyze histogram
- *   // Calculate average luminance for brightness
- *   // Calculate standard deviation for contrast
- *   // Analyze color channels for warmth (R-B ratio)
- *   // Calculate saturation from HSL conversion
- * }
- * 
- * async function applyColorGrading(
- *   imageUrl: string,
- *   adjustment: ConsistencyAdjustment
- * ): Promise<string> {
- *   // Use Sharp or a color grading model to apply adjustments
- *   // Return new URL of adjusted image
- * }
- */
-
 export function getConsistencyReport(
   metrics: ConsistencyMetrics,
   adjustments: ConsistencyAdjustment[],
@@ -348,7 +291,7 @@ export function getConsistencyReport(
   const lines: string[] = [];
   
   lines.push(`🎨 Consistency Report`);
-  lines.push(`━━━━━━━━━━━━━━━━━━━━━`);
+  lines.push(`─────────────────────`);
   lines.push(`Score: ${score}%`);
   lines.push(``);
   lines.push(`Target Metrics:`);

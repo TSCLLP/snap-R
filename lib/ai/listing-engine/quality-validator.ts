@@ -59,7 +59,6 @@ Return ONLY valid JSON:
 Where:
 - overallQuality: 0-100
 - isAcceptable: true if quality >= 70
-- type: artifact | distortion | color_shift | blur | inconsistency | other
 - severity: low | medium | high
 - recommendation: approve | review | reject`;
 
@@ -77,7 +76,7 @@ export async function validateResult(
       isValid: false,
       confidence: 0,
       issues: [{
-        type: 'other',
+        type: 'incomplete',
         severity: 'high',
         description: 'Enhancement failed',
       }],
@@ -201,7 +200,6 @@ function normalizeValidation(
           type: validateIssueType(issue.type),
           severity: validateSeverity(issue.severity),
           description: String(issue.description || 'Unknown issue'),
-          location: issue.location,
         });
       }
     }
@@ -227,10 +225,19 @@ function normalizeValidation(
 }
 
 function validateIssueType(value: any): ValidationIssue['type'] {
-  const valid: ValidationIssue['type'][] = [
-    'artifact', 'distortion', 'color_shift', 'blur', 'inconsistency', 'other'
-  ];
-  return valid.includes(value) ? value : 'other';
+  // Map legacy/model outputs to V3 canonical types
+  const mapping: Record<string, ValidationIssue['type']> = {
+    'artifact': 'artifacts',
+    'artifacts': 'artifacts',
+    'distortion': 'quality',
+    'color_shift': 'quality',
+    'blur': 'quality',
+    'quality': 'quality',
+    'inconsistency': 'inconsistency',
+    'incomplete': 'incomplete',
+    'other': 'incomplete',
+  };
+  return mapping[value] || 'incomplete';
 }
 
 function validateSeverity(value: any): ValidationIssue['severity'] {
@@ -333,7 +340,7 @@ export function quickValidate(result: PhotoProcessingResult): ValidationResult {
   // Check for partial tool application
   if (result.toolsApplied.length === 0) {
     issues.push({
-      type: 'other',
+      type: 'incomplete',
       severity: 'high',
       description: 'No enhancements were applied',
     });
@@ -342,7 +349,7 @@ export function quickValidate(result: PhotoProcessingResult): ValidationResult {
   // Check processing time anomalies
   if (result.processingTime > 180000) { // > 3 minutes
     issues.push({
-      type: 'other',
+      type: 'incomplete',
       severity: 'medium',
       description: 'Unusually long processing time',
     });
@@ -351,7 +358,7 @@ export function quickValidate(result: PhotoProcessingResult): ValidationResult {
   // Check confidence
   if (result.confidence < 50) {
     issues.push({
-      type: 'other',
+      type: 'incomplete',
       severity: 'medium',
       description: 'Low confidence in enhancement quality',
     });

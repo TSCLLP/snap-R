@@ -1,133 +1,16 @@
 /**
- * SnapR AI Engine V2 - Type Definitions
- * =====================================
- * Core types for the listing-level AI engine
+ * SnapR AI Engine V3 - Listing Engine Types
+ * ==========================================
+ * Types for orchestration, execution, and API responses
+ * 
+ * NOTE: PhotoAnalysis, PhotoStrategy, ListingStrategy are in decision-engine/types.ts
  */
 
-import { ToolId } from '../router';
-
 // ============================================
-// PHOTO ANALYSIS TYPES
-// ============================================
-
-export type PhotoType =
-  | 'exterior_front'
-  | 'exterior_back'
-  | 'exterior_side'
-  | 'interior_living'
-  | 'interior_kitchen'
-  | 'interior_bedroom'
-  | 'interior_bathroom'
-  | 'interior_dining'
-  | 'interior_office'
-  | 'interior_other'
-  | 'drone'
-  | 'detail'
-  | 'unknown';
-
-export type SkyQuality = 'clear_blue' | 'overcast' | 'blown_out' | 'ugly' | 'good' | 'none';
-
-export type LawnQuality = 'lush_green' | 'patchy' | 'brown' | 'dead' | 'none';
-
-export type LightingQuality = 'well_lit' | 'dark' | 'overexposed' | 'mixed' | 'flash_harsh';
-
-export type ClutterLevel = 'none' | 'light' | 'moderate' | 'heavy';
-
-export type CompositionQuality = 'excellent' | 'good' | 'average' | 'poor';
-
-export type SharpnessQuality = 'sharp' | 'acceptable' | 'soft' | 'blurry';
-
-export type Priority = 'critical' | 'recommended' | 'optional' | 'none';
-
-export interface PhotoAnalysis {
-  photoId: string;
-  photoUrl: string;
-  
-  // Classification
-  photoType: PhotoType;
-  
-  // Sky Analysis (exteriors)
-  hasSky: boolean;
-  skyVisible: number; // 0-100 percentage
-  skyQuality: SkyQuality;
-  
-  // Twilight Candidacy (exteriors)
-  twilightCandidate: boolean;
-  twilightScore: number; // 0-100
-  hasVisibleWindows: boolean;
-  
-  // Lawn Analysis (exteriors)
-  hasLawn: boolean;
-  lawnVisible: number; // 0-100 percentage
-  lawnQuality: LawnQuality;
-  
-  // Lighting Analysis (all)
-  lighting: LightingQuality;
-  needsHDR: boolean;
-  
-  // Interior Specific
-  hasClutter: boolean;
-  clutterLevel: ClutterLevel;
-  roomEmpty: boolean;
-  hasFireplace: boolean;
-  hasPool: boolean;
-  hasTV: boolean;
-  
-  // Quality Metrics
-  composition: CompositionQuality;
-  sharpness: SharpnessQuality;
-  verticalAlignment: boolean;
-  
-  // Hero Candidacy
-  heroScore: number; // 0-100
-  heroReason: string;
-  
-  // Recommendations
-  suggestedTools: ToolId[];
-  priority: Priority;
-  confidence: number; // 0-100
-  
-  // Metadata
-  analyzedAt: string;
-  analysisVersion: string;
-}
-
-// ============================================
-// STRATEGY TYPES
-// ============================================
-
-export interface PhotoStrategy {
-  photoId: string;
-  photoUrl: string;
-  tools: ToolId[];
-  toolOrder: ToolId[]; // Ordered execution sequence
-  priority: Priority;
-  confidence: number;
-  isHeroCandidate: boolean;
-  isTwilightTarget: boolean;
-  estimatedProcessingTime: number; // seconds
-}
-
-export interface ListingStrategy {
-  listingId: string;
-  heroPhotoId: string | null;
-  twilightPhotoIds: string[];
-  shouldReplaceSky: boolean;
-  shouldEnhanceLawns: boolean;
-  photoStrategies: PhotoStrategy[];
-  totalPhotos: number;
-  photosRequiringWork: number;
-  estimatedTotalTime: number; // seconds
-  overallConfidence: number; // 0-100
-  createdAt: string;
-}
-
-// ============================================
-// PROCESSING TYPES
+// PROCESSING STATUS
 // ============================================
 
 export type ProcessingStatus = 
-  | 'pending'
   | 'analyzing'
   | 'strategizing'
   | 'processing'
@@ -137,18 +20,43 @@ export type ProcessingStatus =
   | 'needs_review'
   | 'failed';
 
+// ============================================
+// PROCESSING PROGRESS (SSE Updates)
+// ============================================
+
+export interface ProcessingProgress {
+  listingId: string;
+  status: ProcessingStatus;
+  currentPhase: string;
+  totalPhotos: number;
+  analyzedPhotos: number;
+  processedPhotos: number;
+  currentPhotoId?: string;
+  currentTool?: string;
+  estimatedTimeRemaining: number;
+  startedAt: string;
+  messages: string[];
+}
+
+// ============================================
+// PHOTO PROCESSING RESULT (Legacy)
+// ============================================
+
 export interface PhotoProcessingResult {
   photoId: string;
   originalUrl: string;
   enhancedUrl: string | null;
-  toolsApplied: ToolId[];
+  toolsApplied: string[];
   success: boolean;
   error?: string;
   confidence: number;
-  processingTime: number; // ms
+  processingTime: number;
   needsReview: boolean;
-  reviewReason?: string;
 }
+
+// ============================================
+// LISTING PROCESSING RESULT
+// ============================================
 
 export interface ListingProcessingResult {
   listingId: string;
@@ -160,32 +68,14 @@ export interface ListingProcessingResult {
   failedPhotos: number;
   photosNeedingReview: number;
   overallConfidence: number;
-  totalProcessingTime: number; // ms
+  totalProcessingTime: number;
   startedAt: string;
-  completedAt: string | null;
+  completedAt: string;
   error?: string;
 }
 
 // ============================================
-// PROGRESS TRACKING
-// ============================================
-
-export interface ProcessingProgress {
-  listingId: string;
-  status: ProcessingStatus;
-  currentPhase: string;
-  totalPhotos: number;
-  analyzedPhotos: number;
-  processedPhotos: number;
-  currentPhotoId?: string;
-  currentTool?: ToolId;
-  estimatedTimeRemaining: number; // seconds
-  startedAt: string;
-  messages: string[];
-}
-
-// ============================================
-// CONSISTENCY TYPES
+// CONSISTENCY METRICS
 // ============================================
 
 export interface ConsistencyMetrics {
@@ -197,7 +87,7 @@ export interface ConsistencyMetrics {
 
 export interface ConsistencyAdjustment {
   photoId: string;
-  brightness: number; // -100 to +100
+  brightness: number;
   contrast: number;
   warmth: number;
   saturation: number;
@@ -211,28 +101,25 @@ export interface ValidationResult {
   photoId: string;
   isValid: boolean;
   confidence: number;
-  issues: ValidationIssue[];
   needsReview: boolean;
+  issues: ValidationIssue[];
 }
 
 export interface ValidationIssue {
-  type: 'artifact' | 'distortion' | 'color_shift' | 'blur' | 'inconsistency' | 'other';
+  type: 'quality' | 'artifacts' | 'inconsistency' | 'incomplete';
   severity: 'low' | 'medium' | 'high';
   description: string;
-  location?: string; // e.g., "top-left", "sky area"
 }
 
 // ============================================
-// API TYPES
+// API REQUEST/RESPONSE TYPES
 // ============================================
 
 export interface PrepareListingRequest {
   listingId: string;
   options?: {
-    skipTwilight?: boolean;
-    skipStaging?: boolean;
     prioritizeSpeed?: boolean;
-    maxConcurrency?: number;
+    enhancementLevel?: 'basic' | 'standard' | 'premium';
   };
 }
 
@@ -241,19 +128,13 @@ export interface PrepareListingResponse {
   listingId: string;
   status: ProcessingStatus;
   message: string;
-  estimatedTime?: number; // seconds
+  estimatedTime?: number;
   error?: string;
 }
 
 export interface ListingStatusResponse {
   listingId: string;
   status: ProcessingStatus;
-  heroPhotoId: string | null;
-  preparedAt: string | null;
-  totalPhotos: number;
-  enhancedPhotos: number;
-  photosNeedingReview: number;
-  overallConfidence: number;
-  canExport: boolean;
-  canShare: boolean;
+  progress?: ProcessingProgress;
+  result?: ListingProcessingResult;
 }

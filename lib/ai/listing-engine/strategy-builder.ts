@@ -1,436 +1,533 @@
 /**
- * SnapR AI Engine V2 - Strategy Builder
+ * SnapR AI Engine V3 - Strategy Builder
  * ======================================
- * Decides what enhancements to apply to each photo
+ * IMPLEMENTS: decision-engine/pseudo.ts v1.1
+ * USES: decision-engine/types.ts v1.2
+ * USES: decision-engine/confidence.ts v1.1
+ * 
+ * This file MUST follow the locked specs exactly.
+ * Any changes here must be reflected in the spec files first.
  */
 
-import { 
-  PhotoAnalysis, 
-  PhotoStrategy, 
+import {
+  PhotoRole,
+  PhotoAnalysis,
+  PhotoStrategy,
   ListingStrategy,
-  Priority 
-} from './types';
-import { ToolId } from '../router';
-import { isExterior, isInterior } from './photo-intelligence';
+  EnhancementDecision,
+  ToolId,
+  ListingCaps,
+  CapsUsage,
+  LockedPresets,
+  DecisionEngineConfig,
+  DEFAULT_CONFIG,
+  TOOL_METADATA,
+  calculateCaps,
+  createEmptyCapsUsage,
+} from '../decision-engine/types';
+
+import {
+  calculateListingConfidence,
+  calculatePhotoConfidence,
+} from '../decision-engine/confidence';
+
+// Re-export for backward compatibility
 
 // ============================================
-// CONFIGURATION
+// MAIN ENTRY POINT
 // ============================================
 
-const CONFIG = {
-  // Maximum twilight photos per listing
-  maxTwilightPhotos: 2,
-  
-  // Minimum scores for various decisions
-  minTwilightScore: 75,
-  minHeroScore: 70,
-  minSkyVisiblePercent: 15,
-  minLawnVisiblePercent: 20,
-  
-  // Threshold for "most photos have bad sky" decision
-  badSkyRatioThreshold: 0.3,
-  
-  // Tool execution order (dependencies)
-  toolOrder: [
-    // First: Structural fixes
-    'perspective-correction',
-    'lens-correction',
-    
-    // Second: Content changes
-    'declutter',
-    'virtual-staging',
-    'object-removal',
-    
-    // Third: Environmental changes
-    'sky-replacement',
-    'virtual-twilight',
-    'lawn-repair',
-    'snow-removal',
-    'seasonal-spring',
-    'seasonal-summer', 
-    'seasonal-fall',
-    'pool-enhance',
-    
-    // Fourth: Feature additions
-    'fire-fireplace',
-    'tv-screen',
-    'lights-on',
-    'window-masking',
-    
-    // Fifth: Lighting & color
-    'flash-fix',
-    'reflection-removal',
-    'power-line-removal',
-    'hdr',
-    'auto-enhance',
-    'color-balance',
-  ] as ToolId[],
-  
-  // Estimated processing time per tool (seconds)
-  toolTimes: {
-    'sky-replacement': 25,
-    'virtual-twilight': 30,
-    'lawn-repair': 25,
-    'pool-enhance': 20,
-    'declutter': 30,
-    'virtual-staging': 35,
-    'fire-fireplace': 20,
-    'tv-screen': 20,
-    'lights-on': 20,
-    'window-masking': 20,
-    'color-balance': 15,
-    'hdr': 15,
-    'auto-enhance': 15,
-    'perspective-correction': 20,
-    'lens-correction': 20,
-    'snow-removal': 25,
-    'seasonal-spring': 25,
-    'seasonal-summer': 25,
-    'seasonal-fall': 25,
-    'reflection-removal': 20,
-    'power-line-removal': 20,
-    'object-removal': 25,
-    'flash-fix': 15,
-  } as Record<ToolId, number>,
-};
-
-// ============================================
-// PRESET LOCKING (Consistency)
-// ============================================
-
-function determineSkyPreset(analyses: PhotoAnalysis[]): string {
-  // Count sky quality across exteriors to pick best preset
-  const exteriorsWithSky = analyses.filter(a => 
-    a.photoType.startsWith('exterior') && a.hasSky && a.skyVisible >= 15
-  );
-  
-  const hasSunset = exteriorsWithSky.some(a => 
-    a.skyQuality === 'good' || a.heroScore > 80
-  );
-  
-  // Default to dramatic-clouds for consistency, sunset for hero-worthy listings
-  return hasSunset ? 'sunset' : 'dramatic-clouds';
-}
-
-function determineTwilightPreset(analyses: PhotoAnalysis[]): string {
-  // Pick twilight preset based on best candidate
-  const twilightCandidates = analyses.filter(a => 
-    a.twilightCandidate && a.twilightScore > 75
-  );
-  
-  // Blue hour is most universally appealing
-  return 'blue-hour';
-}
-
-// ============================================
-// MAIN STRATEGY BUILDER
-// ============================================
-
+/**
+ * buildListingStrategy
+ * 
+ * Main entry point for strategy building.
+ * Implements pseudo.ts v1.1 algorithm exactly.
+ */
 export function buildListingStrategy(
   listingId: string,
-  analyses: PhotoAnalysis[]
+  analyses: PhotoAnalysis[],
+  config: Partial<DecisionEngineConfig> = {}
 ): ListingStrategy {
-  console.log(`[StrategyBuilder] Building strategy for ${analyses.length} photos`);
+  const cfg = { ...DEFAULT_CONFIG, ...config };
   
-  // Step 1: Make listing-level decisions
-  const listingDecisions = makeListingDecisions(analyses);
+  console.log(`\n[StrategyBuilder] ========================================`);
+  console.log(`[StrategyBuilder] Building strategy for ${listingId}`);
+  console.log(`[StrategyBuilder] Photos: ${analyses.length}`);
+  console.log(`[StrategyBuilder] ========================================\n`);
   
-  // Step 2: Select hero photo
-  const heroPhotoId = selectHeroPhoto(analyses);
+  // ========================================
+  // PHASE 1: CLASSIFY PHOTO ROLES
+  // ========================================
   
-  // Step 3: Select twilight photos (max 2)
-  const twilightPhotoIds = selectTwilightPhotos(analyses, listingDecisions);
+  const totalPhotos = analyses.length;
+  const heroCount = Math.ceil(totalPhotos * cfg.heroPercentage);
+  const utilityCount = Math.ceil(totalPhotos * cfg.utilityPercentage);
+  const supportingCount = totalPhotos - heroCount - utilityCount;
   
-  // Step 4: Determine locked presets for consistency
-  const lockedPresets = {
-    skyPreset: determineSkyPreset(analyses),
-    twilightPreset: determineTwilightPreset(analyses),
-    lawnPreset: 'lush-green',
-    stagingStyle: 'modern',
-  };
+  const sorted = [...analyses].sort((a, b) => b.heroScore - a.heroScore);
   
-  // Step 5: Build individual photo strategies with locked presets
-  const photoStrategies = analyses.map(analysis => 
-    buildPhotoStrategy(analysis, listingDecisions, twilightPhotoIds, lockedPresets)
+  for (let i = 0; i < sorted.length; i++) {
+    if (i < heroCount) {
+      sorted[i].role = 'hero';
+    } else if (i >= totalPhotos - utilityCount) {
+      sorted[i].role = 'utility';
+    } else {
+      sorted[i].role = 'supporting';
+    }
+  }
+  
+  console.log(`[StrategyBuilder] Role assignment:`, {
+    hero: heroCount,
+    supporting: supportingCount,
+    utility: utilityCount,
+  });
+  
+  // ========================================
+  // PHASE 2: CALCULATE CAPS
+  // ========================================
+  
+  const interiorPhotos = analyses.filter(p => p.photoType === 'interior').length;
+  const poolPhotos = analyses.filter(p => p.hasPool).length;
+  
+  const caps = calculateCaps(totalPhotos, interiorPhotos, poolPhotos);
+  const capsUsage = createEmptyCapsUsage();
+  
+  console.log(`[StrategyBuilder] Caps:`, caps);
+  
+  // ========================================
+  // PHASE 3: SELECT HERO & TWILIGHT PHOTOS
+  // ========================================
+  
+  const heroPhotoId = sorted[0]?.photoId || '';
+  const exteriors = sorted.filter(p => p.photoType === 'exterior');
+  const twilightPhotoId = exteriors.length > 0 ? exteriors[0].photoId : null;
+  
+  console.log(`[StrategyBuilder] Hero photo: ${heroPhotoId}`);
+  console.log(`[StrategyBuilder] Twilight photo: ${twilightPhotoId || 'none'}`);
+  
+  // ========================================
+  // PHASE 4: BUILD PHOTO STRATEGIES
+  // ========================================
+  // Process in role priority order (Hero → Supporting → Utility)
+  
+  const orderedPhotos = [
+    ...sorted.filter(p => p.role === 'hero'),
+    ...sorted.filter(p => p.role === 'supporting'),
+    ...sorted.filter(p => p.role === 'utility'),
+  ];
+  
+  const photoStrategies: PhotoStrategy[] = [];
+  
+  for (const photo of orderedPhotos) {
+    const strategy = buildPhotoStrategy(
+      photo,
+      twilightPhotoId,
+      caps,
+      capsUsage,
+      cfg
+    );
+    photoStrategies.push(strategy);
+  }
+  
+  // ========================================
+  // PHASE 5: LOCK PRESETS
+  // ========================================
+  
+  const lockedPresets = determineLockedPresets(photoStrategies, analyses);
+  
+  console.log(`[StrategyBuilder] Locked presets:`, lockedPresets);
+  
+  // ========================================
+  // PHASE 6: CALCULATE ESTIMATES
+  // ========================================
+  
+  const estimatedTime = calculateEstimatedTime(photoStrategies);
+  const estimatedCost = calculateEstimatedCost(photoStrategies, analyses.length);
+  
+  // ========================================
+  // PHASE 7: CALCULATE CONFIDENCE
+  // ========================================
+  
+  const confidenceResult = calculateListingConfidence(
+    photoStrategies,
+    analyses,
+    capsUsage,
+    caps
   );
   
-  // Step 5: Calculate totals
-  const photosRequiringWork = photoStrategies.filter(s => s.tools.length > 0).length;
-  const estimatedTotalTime = photoStrategies.reduce((sum, s) => sum + s.estimatedProcessingTime, 0);
-  const overallConfidence = Math.round(
-    analyses.reduce((sum, a) => sum + a.confidence, 0) / analyses.length
-  );
+  console.log(`[StrategyBuilder] Confidence: ${confidenceResult.score}% (${confidenceResult.status})`);
+  if (confidenceResult.flags.length > 0) {
+    console.log(`[StrategyBuilder] Flags:`, confidenceResult.flags.map(f => f.code));
+  }
+  
+  // ========================================
+  // BUILD FINAL STRATEGY
+  // ========================================
   
   const strategy: ListingStrategy = {
     listingId,
-    heroPhotoId,
-    twilightPhotoIds,
-    shouldReplaceSky: listingDecisions.shouldReplaceSky,
-    shouldEnhanceLawns: listingDecisions.shouldEnhanceLawns,
+    totalPhotos,
+    heroCount,
+    supportingCount,
+    utilityCount,
     photoStrategies,
-    totalPhotos: analyses.length,
-    photosRequiringWork,
-    estimatedTotalTime,
-    overallConfidence,
-    createdAt: new Date().toISOString(),
+    lockedPresets,
+    caps,
+    capsUsage,
+    heroPhotoId,
+    twilightPhotoId,
+    estimatedTime,
+    estimatedCost,
+    confidenceScore: confidenceResult.score,
   };
   
-  console.log(`[StrategyBuilder] Strategy complete:`, {
-    heroPhotoId,
-    twilightCount: twilightPhotoIds.length,
-    photosRequiringWork,
-    estimatedTime: `${Math.round(estimatedTotalTime / 60)}min`,
-  });
+  console.log(`\n${getStrategySummary(strategy)}\n`);
   
   return strategy;
 }
 
 // ============================================
-// LISTING-LEVEL DECISIONS
-// ============================================
-
-interface ListingDecisions {
-  shouldReplaceSky: boolean;
-  shouldEnhanceLawns: boolean;
-  dominantLighting: 'bright' | 'dark' | 'mixed';
-}
-
-function makeListingDecisions(analyses: PhotoAnalysis[]): ListingDecisions {
-  // Analyze sky quality across all exteriors
-  const exteriorsWithSky = analyses.filter(a => 
-    isExterior(a.photoType) && a.hasSky && a.skyVisible >= CONFIG.minSkyVisiblePercent
-  );
-  
-  const badSkyCount = exteriorsWithSky.filter(a => 
-    a.skyQuality === 'blown_out' || a.skyQuality === 'ugly'
-  ).length;
-  
-  const badSkyRatio = exteriorsWithSky.length > 0 
-    ? badSkyCount / exteriorsWithSky.length 
-    : 0;
-  
-  // If more than 30% have bad sky, replace all exterior skies for consistency
-  const shouldReplaceSky = badSkyRatio >= CONFIG.badSkyRatioThreshold;
-  
-  // Analyze lawn quality
-  const exteriorsWithLawn = analyses.filter(a =>
-    isExterior(a.photoType) && a.hasLawn && a.lawnVisible >= CONFIG.minLawnVisiblePercent
-  );
-  
-  const badLawnCount = exteriorsWithLawn.filter(a =>
-    a.lawnQuality === 'brown' || a.lawnQuality === 'dead' || a.lawnQuality === 'patchy'
-  ).length;
-  
-  const badLawnRatio = exteriorsWithLawn.length > 0
-    ? badLawnCount / exteriorsWithLawn.length
-    : 0;
-  
-  const shouldEnhanceLawns = badLawnRatio >= 0.5;
-  
-  // Analyze dominant lighting
-  const darkCount = analyses.filter(a => a.lighting === 'dark').length;
-  const brightCount = analyses.filter(a => a.lighting === 'well_lit' || a.lighting === 'overexposed').length;
-  
-  let dominantLighting: 'bright' | 'dark' | 'mixed' = 'mixed';
-  if (darkCount > analyses.length * 0.6) dominantLighting = 'dark';
-  else if (brightCount > analyses.length * 0.6) dominantLighting = 'bright';
-  
-  console.log(`[StrategyBuilder] Listing decisions:`, {
-    shouldReplaceSky,
-    badSkyRatio: `${Math.round(badSkyRatio * 100)}%`,
-    shouldEnhanceLawns,
-    dominantLighting,
-  });
-  
-  return { shouldReplaceSky, shouldEnhanceLawns, dominantLighting };
-}
-
-// ============================================
-// HERO PHOTO SELECTION
-// ============================================
-
-function selectHeroPhoto(analyses: PhotoAnalysis[]): string | null {
-  // Prefer front exteriors with high hero scores
-  const candidates = analyses
-    .filter(a => a.photoType === 'exterior_front' && a.heroScore >= CONFIG.minHeroScore)
-    .sort((a, b) => b.heroScore - a.heroScore);
-  
-  if (candidates.length > 0) {
-    return candidates[0].photoId;
-  }
-  
-  // Fallback: any exterior with high score
-  const exteriorCandidates = analyses
-    .filter(a => isExterior(a.photoType) && a.heroScore >= 60)
-    .sort((a, b) => b.heroScore - a.heroScore);
-  
-  if (exteriorCandidates.length > 0) {
-    return exteriorCandidates[0].photoId;
-  }
-  
-  // Last resort: highest scored photo
-  const sorted = [...analyses].sort((a, b) => b.heroScore - a.heroScore);
-  return sorted[0]?.photoId || null;
-}
-
-// ============================================
-// TWILIGHT SELECTION
-// ============================================
-
-function selectTwilightPhotos(
-  analyses: PhotoAnalysis[],
-  decisions: ListingDecisions
-): string[] {
-  // Only select twilight candidates from exteriors with windows
-  const candidates = analyses
-    .filter(a => 
-      a.twilightCandidate &&
-      a.twilightScore >= CONFIG.minTwilightScore &&
-      a.hasVisibleWindows &&
-      isExterior(a.photoType)
-    )
-    .sort((a, b) => b.twilightScore - a.twilightScore)
-    .slice(0, CONFIG.maxTwilightPhotos);
-  
-  return candidates.map(c => c.photoId);
-}
-
-// ============================================
-// INDIVIDUAL PHOTO STRATEGY
+// PHOTO STRATEGY BUILDER
 // ============================================
 
 function buildPhotoStrategy(
-  analysis: PhotoAnalysis,
-  listingDecisions: ListingDecisions,
-  twilightPhotoIds: string[],
-  lockedPresets?: { skyPreset: string; twilightPreset: string; lawnPreset: string; stagingStyle: string }
+  photo: PhotoAnalysis,
+  twilightPhotoId: string | null,
+  caps: ListingCaps,
+  capsUsage: CapsUsage,
+  cfg: DecisionEngineConfig
 ): PhotoStrategy {
-  const tools: ToolId[] = [];
-  const isTwilightTarget = twilightPhotoIds.includes(analysis.photoId);
+  const decisions: EnhancementDecision[] = [];
+  const toolOrder: ToolId[] = [];
+  const role = photo.role || 'supporting';
   
-  // === STRUCTURAL FIXES (always first) ===
-  if (!analysis.verticalAlignment) {
-    tools.push('perspective-correction');
+  // -----------------------------------------
+  // STEP 4.1: APPLY CONFIDENCE DOWNGRADE
+  // -----------------------------------------
+  
+  const adjustedDeficiencies = applyConfidenceDowngrade(
+    photo.deficiencies,
+    photo.analysisConfidence,
+    cfg.minConfidence
+  );
+  
+  // -----------------------------------------
+  // CHECK IF TWILIGHT TARGET
+  // -----------------------------------------
+  // Twilight and sky replacement are MUTUALLY EXCLUSIVE
+  
+  const isTwilightTarget = photo.photoId === twilightPhotoId;
+  
+  // -----------------------------------------
+  // STEP 4.2: VIRTUAL TWILIGHT (Check FIRST)
+  // -----------------------------------------
+  
+  if (
+    isTwilightTarget &&
+    capsUsage.twilight < caps.twilight
+  ) {
+    decisions.push({
+      tool: 'virtual-twilight',
+      reason: `Designated twilight photo, highest exterior heroScore`,
+      priority: 'high',
+    });
+    toolOrder.push('virtual-twilight');
+    capsUsage.twilight++;
   }
   
-  // === EXTERIOR LOGIC ===
-  if (isExterior(analysis.photoType)) {
-    
-    // TWILIGHT (if selected for this photo)
-    if (isTwilightTarget) {
-      tools.push('virtual-twilight');
-      // Skip sky replacement if doing twilight (twilight replaces sky)
-    } 
-    // SKY REPLACEMENT
-    else if (analysis.hasSky && analysis.skyVisible >= CONFIG.minSkyVisiblePercent) {
-      if (analysis.skyQuality === 'blown_out' || analysis.skyQuality === 'ugly') {
-        tools.push('sky-replacement');
-      } else if (listingDecisions.shouldReplaceSky && analysis.skyQuality !== 'clear_blue') {
-        // Replace for consistency across listing
-        tools.push('sky-replacement');
-      }
-    }
-    
-    // LAWN REPAIR
-    if (analysis.hasLawn && analysis.lawnVisible >= CONFIG.minLawnVisiblePercent) {
-      if (analysis.lawnQuality === 'brown' || analysis.lawnQuality === 'dead') {
-        tools.push('lawn-repair');
-      } else if (analysis.lawnQuality === 'patchy' && listingDecisions.shouldEnhanceLawns) {
-        tools.push('lawn-repair');
-      }
-    }
-    
-    // POOL
-    if (analysis.hasPool) {
-      tools.push('pool-enhance');
-    }
+  // -----------------------------------------
+  // STEP 4.3: SKY REPLACEMENT
+  // -----------------------------------------
+  // NOT twilight target (mutual exclusion)
+  
+  if (
+    !isTwilightTarget &&
+    role === 'hero' &&
+    photo.hasSky &&
+    adjustedDeficiencies.sky &&
+    adjustedDeficiencies.sky.severity >= cfg.highThreshold &&
+    (adjustedDeficiencies.sky.coverage ?? 0) >= 20 &&
+    capsUsage.skyReplacement < caps.skyReplacement
+  ) {
+    decisions.push({
+      tool: 'sky-replacement',
+      reason: `Hero exterior, sky severity ${adjustedDeficiencies.sky.severity}, coverage ${adjustedDeficiencies.sky.coverage}%`,
+      priority: 'high',
+    });
+    toolOrder.push('sky-replacement');
+    capsUsage.skyReplacement++;
   }
   
-  // === INTERIOR LOGIC ===
-  if (isInterior(analysis.photoType)) {
-    
-    // DECLUTTER
-    if (analysis.hasClutter && (analysis.clutterLevel === 'heavy' || analysis.clutterLevel === 'moderate')) {
-      tools.push('declutter');
-    }
-    
-    // VIRTUAL STAGING (empty rooms)
-    if (analysis.roomEmpty) {
-      tools.push('virtual-staging');
-    }
-    
-    // FIREPLACE
-    if (analysis.hasFireplace) {
-      tools.push('fire-fireplace');
-    }
-    
-    // TV SCREEN
-    if (analysis.hasTV) {
-      tools.push('tv-screen');
-    }
-    
-    // DARK ROOMS
-    if (analysis.lighting === 'dark') {
-      tools.push('lights-on');
-    }
+  // -----------------------------------------
+  // STEP 4.4: LAWN REPAIR
+  // -----------------------------------------
+  
+  if (
+    role !== 'utility' &&
+    photo.hasLawn &&
+    adjustedDeficiencies.lawn &&
+    adjustedDeficiencies.lawn.severity >= cfg.mediumThreshold &&
+    (adjustedDeficiencies.lawn.coverage ?? 0) >= 15 &&
+    capsUsage.lawnRepair < caps.lawnRepair
+  ) {
+    decisions.push({
+      tool: 'lawn-repair',
+      reason: `Lawn severity ${adjustedDeficiencies.lawn.severity}, coverage ${adjustedDeficiencies.lawn.coverage}%`,
+      priority: 'medium',
+    });
+    toolOrder.push('lawn-repair');
+    capsUsage.lawnRepair++;
   }
   
-  // === UNIVERSAL ENHANCEMENTS ===
+  // -----------------------------------------
+  // STEP 4.5: POOL ENHANCE
+  // -----------------------------------------
   
-  // FLASH FIX
-  if (analysis.lighting === 'flash_harsh') {
-    tools.push('flash-fix');
+  if (
+    photo.hasPool &&
+    role !== 'utility' &&
+    adjustedDeficiencies.pool &&
+    adjustedDeficiencies.pool.severity >= cfg.mediumThreshold &&
+    capsUsage.poolEnhance < caps.poolEnhance
+  ) {
+    decisions.push({
+      tool: 'pool-enhance',
+      reason: `Pool detected, severity ${adjustedDeficiencies.pool.severity}`,
+      priority: 'medium',
+    });
+    toolOrder.push('pool-enhance');
+    capsUsage.poolEnhance++;
   }
   
-  // HDR for exposure issues
-  if (analysis.needsHDR || analysis.lighting === 'mixed' || analysis.lighting === 'dark') {
-    if (!tools.includes('auto-enhance')) {
-      tools.push('hdr');
-    }
+  // -----------------------------------------
+  // STEP 4.6: DECLUTTER
+  // -----------------------------------------
+  // NOT bathroom (personal items expected)
+  
+  const isBathroom = photo.subType === 'bathroom';
+  
+  if (
+    role !== 'utility' &&
+    !isBathroom &&
+    adjustedDeficiencies.clutter &&
+    adjustedDeficiencies.clutter.severity >= 50 &&
+    capsUsage.declutter < caps.declutter
+  ) {
+    decisions.push({
+      tool: 'declutter',
+      reason: `Clutter severity ${adjustedDeficiencies.clutter.severity}`,
+      priority: 'medium',
+    });
+    toolOrder.push('declutter');
+    capsUsage.declutter++;
   }
   
-  // BASE ENHANCEMENT (if no other enhancement applied)
-  if (tools.length === 0 || (!tools.includes('hdr') && !tools.includes('virtual-twilight'))) {
-    tools.push('auto-enhance');
+  // -----------------------------------------
+  // STEP 4.7: VIRTUAL STAGING
+  // -----------------------------------------
+  
+  if (
+    role === 'hero' &&
+    photo.isEmpty &&
+    capsUsage.virtualStaging < caps.virtualStaging
+  ) {
+    decisions.push({
+      tool: 'virtual-staging',
+      reason: `Empty room, hero photo`,
+      priority: 'high',
+    });
+    toolOrder.push('virtual-staging');
+    capsUsage.virtualStaging++;
   }
   
-  // Remove duplicates and order correctly
-  const uniqueTools = [...new Set(tools)];
-  const orderedTools = orderTools(uniqueTools);
+  // -----------------------------------------
+  // STEP 4.8: FIRE IN FIREPLACE
+  // -----------------------------------------
   
-  // Calculate processing time
-  const estimatedTime = orderedTools.reduce((sum, tool) => 
-    sum + (CONFIG.toolTimes[tool] || 20), 0
+  if (
+    photo.hasFireplace &&
+    role !== 'utility' &&
+    capsUsage.fireFireplace < caps.fireFireplace
+  ) {
+    decisions.push({
+      tool: 'fire-fireplace',
+      reason: `Fireplace detected`,
+      priority: 'low',
+    });
+    toolOrder.push('fire-fireplace');
+    capsUsage.fireFireplace++;
+  }
+  
+  // -----------------------------------------
+  // STEP 4.9: HDR
+  // -----------------------------------------
+  // NOTE: Auto-enhance is UI/manual only.
+  // Decision engine always uses HDR for deterministic results.
+  
+  if (
+    adjustedDeficiencies.lighting &&
+    adjustedDeficiencies.lighting.severity >= cfg.lowThreshold
+  ) {
+    const strength = role === 'hero' ? 'balanced' : 'light';
+    decisions.push({
+      tool: 'hdr',
+      reason: `Lighting severity ${adjustedDeficiencies.lighting.severity}, strength: ${strength}`,
+      priority: 'low',
+    });
+    toolOrder.push('hdr');
+  }
+  
+  // -----------------------------------------
+  // STEP 4.10: PERSPECTIVE CORRECTION
+  // -----------------------------------------
+  
+  if (
+    role !== 'utility' &&
+    adjustedDeficiencies.perspective &&
+    adjustedDeficiencies.perspective.severity >= cfg.highThreshold
+  ) {
+    decisions.push({
+      tool: 'perspective-correction',
+      reason: `Perspective severity ${adjustedDeficiencies.perspective.severity}`,
+      priority: 'medium',
+    });
+    toolOrder.push('perspective-correction');
+  }
+  
+  // -----------------------------------------
+  // STEP 4.11: TV SCREEN - DISABLED
+  // -----------------------------------------
+  // NEVER auto-apply. Manual tool only.
+  // Too many false positives from Vision AI.
+  
+  // -----------------------------------------
+  // BUILD PHOTO STRATEGY
+  // -----------------------------------------
+  
+  const skipReason = decisions.length === 0
+    ? determineSkipReason(photo)
+    : undefined;
+  
+  const confidence = calculatePhotoConfidence(
+    decisions,
+    photo.analysisConfidence,
+    role
   );
   
   return {
-    photoId: analysis.photoId,
-    photoUrl: analysis.photoUrl,
-    tools: orderedTools,
-    toolOrder: orderedTools,
-    priority: analysis.priority,
-    confidence: analysis.confidence,
-    isHeroCandidate: analysis.heroScore >= CONFIG.minHeroScore,
-    isTwilightTarget,
-    estimatedProcessingTime: estimatedTime,
+    photoId: photo.photoId,
+    photoUrl: photo.photoUrl,
+    role,
+    decisions,
+    toolOrder,
+    confidence,
+    skipReason,
   };
 }
 
 // ============================================
-// TOOL ORDERING
+// HELPER FUNCTIONS
 // ============================================
 
-function orderTools(tools: ToolId[]): ToolId[] {
-  return tools.sort((a, b) => {
-    const indexA = CONFIG.toolOrder.indexOf(a);
-    const indexB = CONFIG.toolOrder.indexOf(b);
-    
-    // Unknown tools go last
-    if (indexA === -1) return 1;
-    if (indexB === -1) return -1;
-    
-    return indexA - indexB;
-  });
+function applyConfidenceDowngrade(
+  deficiencies: PhotoAnalysis['deficiencies'],
+  photoConfidence: number,
+  minConfidence: number
+): PhotoAnalysis['deficiencies'] {
+  const adjusted: PhotoAnalysis['deficiencies'] = {};
+  
+  for (const key of Object.keys(deficiencies) as Array<keyof typeof deficiencies>) {
+    if (deficiencies[key]) {
+      adjusted[key] = { ...deficiencies[key]! };
+      
+      if (photoConfidence < minConfidence) {
+        adjusted[key]!.severity = Math.max(0, adjusted[key]!.severity - 20);
+      }
+    }
+  }
+  
+  return adjusted;
+}
+
+function determineSkipReason(photo: PhotoAnalysis): string {
+  if (photo.role === 'utility') {
+    return 'Utility photo - minimal processing by design';
+  }
+  if (photo.analysisConfidence < 0.5) {
+    return 'Low analysis confidence - skipped to avoid errors';
+  }
+  return 'No significant deficiencies detected';
+}
+
+function determineLockedPresets(
+  strategies: PhotoStrategy[],
+  analyses: PhotoAnalysis[]
+): LockedPresets {
+  const presets: LockedPresets = {};
+  
+  const firstSky = strategies.find(s =>
+    s.decisions.some(d => d.tool === 'sky-replacement')
+  );
+  if (firstSky) {
+    const analysis = analyses.find(a => a.photoId === firstSky.photoId);
+    if (analysis) {
+      presets.skyType = determineSkyPreset(analysis);
+    }
+  }
+  
+  const twilight = strategies.find(s =>
+    s.decisions.some(d => d.tool === 'virtual-twilight')
+  );
+  if (twilight) {
+    presets.twilightTone = 'blue-hour';
+  }
+  
+  const firstLawn = strategies.find(s =>
+    s.decisions.some(d => d.tool === 'lawn-repair')
+  );
+  if (firstLawn) {
+    presets.lawnGreen = 'natural';
+  }
+  
+  presets.hdrStrength = 'balanced';
+  presets.stagingStyle = 'modern';
+  
+  return presets;
+}
+
+function determineSkyPreset(analysis: PhotoAnalysis): LockedPresets['skyType'] {
+  if (analysis.scores.lighting >= 70) return 'soft-blue';
+  if (analysis.scores.composition >= 80) return 'dramatic-clouds';
+  return 'clear';
+}
+
+function calculateEstimatedTime(strategies: PhotoStrategy[]): number {
+  let totalTime = 0;
+  
+  for (const strategy of strategies) {
+    for (const tool of strategy.toolOrder) {
+      totalTime += TOOL_METADATA[tool]?.estimatedTime ?? 5;
+    }
+  }
+  
+  totalTime += strategies.length * 3;
+  
+  return totalTime;
+}
+
+function calculateEstimatedCost(strategies: PhotoStrategy[], photoCount: number): number {
+  let totalCost = 0;
+  
+  for (const strategy of strategies) {
+    for (const tool of strategy.toolOrder) {
+      totalCost += TOOL_METADATA[tool]?.estimatedCost ?? 0.05;
+    }
+  }
+  
+  totalCost += photoCount * 0.02;
+  totalCost += photoCount * 0.01;
+  
+  return Math.round(totalCost * 100) / 100;
 }
 
 // ============================================
@@ -443,17 +540,25 @@ export function getStrategySummary(strategy: ListingStrategy): string {
   lines.push(`📊 Listing Strategy Summary`);
   lines.push(`━━━━━━━━━━━━━━━━━━━━━━━━━`);
   lines.push(`Total Photos: ${strategy.totalPhotos}`);
-  lines.push(`Photos Requiring Work: ${strategy.photosRequiringWork}`);
-  lines.push(`Hero Photo: ${strategy.heroPhotoId || 'None selected'}`);
-  lines.push(`Twilight Photos: ${strategy.twilightPhotoIds.length}`);
-  lines.push(`Estimated Time: ${Math.round(strategy.estimatedTotalTime / 60)} minutes`);
-  lines.push(`Overall Confidence: ${strategy.overallConfidence}%`);
+  lines.push(`Roles: ${strategy.heroCount} hero, ${strategy.supportingCount} supporting, ${strategy.utilityCount} utility`);
+  lines.push(`Hero Photo: ${strategy.heroPhotoId || 'None'}`);
+  lines.push(`Twilight Photo: ${strategy.twilightPhotoId || 'None'}`);
+  lines.push(`Estimated Time: ${Math.round(strategy.estimatedTime / 60)} min`);
+  lines.push(`Estimated Cost: $${strategy.estimatedCost.toFixed(2)}`);
+  lines.push(`Confidence: ${strategy.confidenceScore}%`);
   lines.push(``);
   
-  // Tool breakdown
+  lines.push(`📦 Caps Usage:`);
+  lines.push(`   Sky: ${strategy.capsUsage.skyReplacement}/${strategy.caps.skyReplacement}`);
+  lines.push(`   Lawn: ${strategy.capsUsage.lawnRepair}/${strategy.caps.lawnRepair}`);
+  lines.push(`   Twilight: ${strategy.capsUsage.twilight}/${strategy.caps.twilight}`);
+  lines.push(`   Declutter: ${strategy.capsUsage.declutter}/${strategy.caps.declutter}`);
+  lines.push(`   Staging: ${strategy.capsUsage.virtualStaging}/${strategy.caps.virtualStaging}`);
+  lines.push(``);
+  
   const toolCounts: Record<string, number> = {};
   strategy.photoStrategies.forEach(ps => {
-    ps.tools.forEach(tool => {
+    ps.toolOrder.forEach(tool => {
       toolCounts[tool] = (toolCounts[tool] || 0) + 1;
     });
   });
@@ -465,5 +570,29 @@ export function getStrategySummary(strategy: ListingStrategy): string {
       lines.push(`   ${tool}: ${count} photos`);
     });
   
+  const skipped = strategy.photoStrategies.filter(ps => ps.skipReason);
+  if (skipped.length > 0) {
+    lines.push(``);
+    lines.push(`⏭️ Skipped: ${skipped.length} photos`);
+  }
+  
   return lines.join('\n');
+}
+
+// ============================================
+// BACKWARD COMPATIBILITY EXPORTS
+// ============================================
+
+export function orderByPriority(strategies: PhotoStrategy[]): PhotoStrategy[] {
+  const roleOrder: Record<PhotoRole, number> = {
+    hero: 0,
+    supporting: 1,
+    utility: 2,
+  };
+  
+  return [...strategies].sort((a, b) => {
+    const roleA = roleOrder[a.role] ?? 1;
+    const roleB = roleOrder[b.role] ?? 1;
+    return roleA - roleB;
+  });
 }

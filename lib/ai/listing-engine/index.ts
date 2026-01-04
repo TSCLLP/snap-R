@@ -1,23 +1,24 @@
 /**
- * SnapR AI Engine V2 - Listing Engine (Premium)
- * =============================================
+ * SnapR AI Engine V3 - Listing Engine
+ * =====================================
  * Main orchestrator for listing-level photo preparation
  * 
- * PREMIUM FEATURES:
- * - GPT-4 Vision scene analysis
- * - Locked presets for consistency across listing
- * - Multi-pass twilight with window glow
- * - Window balancing for interiors
- * - Quality validation
+ * ALIGNED WITH: decision-engine/types.ts v1.2
+ * 
+ * V3 PRINCIPLES:
+ * - Strategy builder decides presets (not orchestrator)
+ * - Confidence score decides final status
+ * - Execution reports facts, not quality judgments
+ * - photo-intelligence outputs V3 PhotoAnalysis directly (no adapter)
  */
 
 import { createClient } from '@/lib/supabase/server';
 import { analyzePhotos } from './photo-intelligence';
 import { buildListingStrategy, getStrategySummary } from './strategy-builder';
-import { processListingBatch, orderByPriority } from './batch-processor';
+import { processListingBatch, orderByPriority, PhotoExecutionResult } from './batch-processor';
 import { analyzeConsistency, getConsistencyReport } from './consistency';
 import { validateResults, getValidationReport, quickValidate } from './quality-validator';
-import { determineLockedPresets, LockedPresets } from './preset-locker';
+import { CONFIDENCE_THRESHOLDS } from '../decision-engine/types';
 import {
   ListingProcessingResult,
   ProcessingProgress,
@@ -50,13 +51,12 @@ export async function prepareListing(
   const startTime = Date.now();
   
   console.log(`\n[ListingEngine] ========================================`);
-  console.log(`[ListingEngine] PREPARE LISTING (PREMIUM): ${listingId}`);
+  console.log(`[ListingEngine] PREPARE LISTING (V3): ${listingId}`);
   console.log(`[ListingEngine] ========================================\n`);
   
   const supabase = await createClient();
   
   try {
-    // Update listing status to 'preparing'
     await updateListingStatus(supabase, listingId, 'preparing');
     
     // ========================================
@@ -80,6 +80,7 @@ export async function prepareListing(
     // ========================================
     // PHASE 2: ANALYZE PHOTOS (GPT-4 Vision)
     // ========================================
+    // V3: photo-intelligence now outputs PhotoAnalysis directly
     reportProgress(onProgress, listingId, 'analyzing', `Analyzing ${photos.length} photos with SnapR...`, startTime, { total: photos.length, analyzed: 0, processed: 0 });
     
     const analyses = await analyzePhotos(photos, {
@@ -89,98 +90,119 @@ export async function prepareListing(
     console.log(`[ListingEngine] Analysis complete`);
     
     // ========================================
-    // PHASE 3: DETERMINE LOCKED PRESETS
-    // ========================================
-    reportProgress(onProgress, listingId, 'strategizing', 'Locking presets for consistency...', startTime, { total: photos.length, analyzed: photos.length, processed: 0 });
-    
-    const lockedPresets = determineLockedPresets(analyses);
-    
-    console.log(`[ListingEngine] Presets locked:`, {
-      sky: lockedPresets.skyPreset,
-      twilight: lockedPresets.twilightPreset,
-      staging: lockedPresets.stagingStyle,
-      colorTemp: lockedPresets.colorTemp,
-    });
-    
-    // ========================================
-    // PHASE 4: BUILD STRATEGY
+    // PHASE 3: BUILD STRATEGY
     // ========================================
     reportProgress(onProgress, listingId, 'strategizing', 'Building enhancement strategy...', startTime, { total: photos.length, analyzed: photos.length, processed: 0 });
     
     const strategy = buildListingStrategy(listingId, analyses);
+    const lockedPresets = strategy.lockedPresets;
+    
+    console.log(`[ListingEngine] Strategy built:`, {
+      confidence: strategy.confidenceScore,
+      heroPhoto: strategy.heroPhotoId,
+      twilightPhoto: strategy.twilightPhotoId,
+      presets: {
+        sky: lockedPresets.skyType,
+        twilight: lockedPresets.twilightTone,
+        staging: lockedPresets.stagingStyle,
+      },
+    });
     
     console.log(`\n${getStrategySummary(strategy)}\n`);
     
     // ========================================
-    // PHASE 5: PROCESS PHOTOS (PREMIUM)
+    // PHASE 4: PROCESS PHOTOS
     // ========================================
-    reportProgress(onProgress, listingId, 'processing', 'Enhancing photos with premium engine...', startTime, { total: photos.length, analyzed: photos.length, processed: 0 });
+    reportProgress(onProgress, listingId, 'processing', 'Enhancing photos...', startTime, { total: photos.length, analyzed: photos.length, processed: 0 });
     
-    // Order by priority (hero first, then critical, etc.)
     strategy.photoStrategies = orderByPriority(strategy.photoStrategies);
     
-    const results = await processListingBatch(strategy, {
+    const batchResult = await processListingBatch(strategy, {
       listingId,
       userId,
-      lockedPresets, // Pass locked presets for consistency
+      lockedPresets,
       onProgress,
     });
     
-    console.log(`[ListingEngine] Processing complete: ${results.filter(r => r.success).length}/${results.length} successful`);
+    const photoResults = batchResult.photoResults;
+    
+    console.log(`[ListingEngine] Processing complete: ${batchResult.successCount}/${batchResult.totalPhotos} successful`);
     
     // ========================================
-    // PHASE 6: CONSISTENCY PASS
+    // PHASE 5: CONSISTENCY PASS (Legacy)
     // ========================================
+    // TEMP: Legacy adapter for consistency analyzer
+    // TODO: Replace analyzeConsistency with V3-native version
     if (CONFIG.enableConsistencyPass) {
-      reportProgress(onProgress, listingId, 'consistency_pass', 'Verifying consistency...', startTime, { total: photos.length, analyzed: photos.length, processed: results.length });
+      reportProgress(onProgress, listingId, 'consistency_pass', 'Verifying consistency...', startTime, { total: photos.length, analyzed: photos.length, processed: photoResults.length });
       
-      const consistency = await analyzeConsistency(results);
+      const legacyResults = photoResults.map(r => ({
+        ...r,
+        success: r.executionStatus === 'success' || r.executionStatus === 'partial',
+        confidence: r.executionStatus === 'success' ? 90 : r.executionStatus === 'partial' ? 70 : 50,
+        needsReview: r.executionStatus === 'failed' || r.executionErrors.length > 0,
+      }));
+      
+      const consistency = await analyzeConsistency(legacyResults);
       console.log(`\n${getConsistencyReport(consistency.metrics, consistency.adjustments, consistency.consistencyScore)}\n`);
     }
     
     // ========================================
-    // PHASE 7: VALIDATION
+    // PHASE 6: VALIDATION (Legacy)
     // ========================================
-    reportProgress(onProgress, listingId, 'validating', 'Validating results...', startTime, { total: photos.length, analyzed: photos.length, processed: results.length });
+    // TEMP: Legacy adapter for quality validator
+    // TODO: Replace with V3-native validation
+    reportProgress(onProgress, listingId, 'validating', 'Validating results...', startTime, { total: photos.length, analyzed: photos.length, processed: photoResults.length });
+    
+    const legacyForValidation = photoResults.map(r => ({
+      photoId: r.photoId,
+      originalUrl: r.originalUrl,
+      enhancedUrl: r.enhancedUrl,
+      toolsApplied: r.toolsApplied,
+      success: r.executionStatus === 'success' || r.executionStatus === 'partial',
+      error: r.executionErrors.length > 0 ? r.executionErrors[0] : undefined,
+      confidence: r.executionStatus === 'success' ? 90 : r.executionStatus === 'partial' ? 70 : 50,
+      processingTime: r.processingTimeMs,
+      needsReview: r.executionStatus === 'failed' || r.executionErrors.length > 0,
+    }));
     
     let validations;
     if (CONFIG.enableFullValidation) {
-      validations = await validateResults(results);
+      validations = await validateResults(legacyForValidation);
     } else {
-      validations = results.map(r => quickValidate(r));
+      validations = legacyForValidation.map(r => quickValidate(r));
     }
     
     console.log(`\n${getValidationReport(validations)}\n`);
     
     // ========================================
-    // PHASE 8: FINALIZE
+    // PHASE 7: FINALIZE
     // ========================================
-    const successfulPhotos = results.filter(r => r.success).length;
-    const failedPhotos = results.filter(r => !r.success).length;
+    const successfulPhotos = batchResult.successCount + batchResult.partialCount;
+    const failedPhotos = batchResult.failedCount;
     const photosNeedingReview = validations.filter(v => v.needsReview).length;
     
-    const overallConfidence = Math.round(
-      validations.reduce((sum, v) => sum + v.confidence, 0) / validations.length
-    );
+    // V3: Confidence score from strategy determines final status
+    const confidenceScore = strategy.confidenceScore;
     
-    // Determine final status
-    let finalStatus: ProcessingStatus = 'completed';
-    if (failedPhotos > results.length * 0.3) {
-      finalStatus = 'failed';
-    } else if (photosNeedingReview > 0 || overallConfidence < 70) {
+    let finalStatus: ProcessingStatus;
+    if (confidenceScore >= CONFIDENCE_THRESHOLDS.PREPARED) {
+      finalStatus = 'completed';
+    } else if (confidenceScore >= CONFIDENCE_THRESHOLDS.PREPARED_MINOR) {
       finalStatus = 'needs_review';
+    } else {
+      finalStatus = 'failed';
     }
     
-    // Update listing in database
     await finalizeListing(supabase, listingId, {
       status: finalStatus === 'completed' ? 'prepared' : finalStatus,
       heroPhotoId: strategy.heroPhotoId,
-      confidence: overallConfidence,
-      toolsApplied: countToolsApplied(results),
+      confidence: confidenceScore,
+      toolsApplied: countToolsApplied(photoResults),
       lockedPresets: {
-        sky: lockedPresets.skyPreset,
-        twilight: lockedPresets.twilightPreset,
-        staging: lockedPresets.stagingStyle,
+        sky: lockedPresets.skyType || 'soft-blue',
+        twilight: lockedPresets.twilightTone || 'blue-hour',
+        staging: lockedPresets.stagingStyle || 'modern',
       },
     });
     
@@ -189,21 +211,21 @@ export async function prepareListing(
     console.log(`\n[ListingEngine] ========================================`);
     console.log(`[ListingEngine] COMPLETE: ${finalStatus.toUpperCase()}`);
     console.log(`[ListingEngine] Time: ${(totalTime / 1000).toFixed(1)}s`);
-    console.log(`[ListingEngine] Success: ${successfulPhotos}/${results.length}`);
-    console.log(`[ListingEngine] Confidence: ${overallConfidence}%`);
-    console.log(`[ListingEngine] Presets used: sky=${lockedPresets.skyPreset}, twilight=${lockedPresets.twilightPreset}`);
+    console.log(`[ListingEngine] Success: ${successfulPhotos}/${photoResults.length}`);
+    console.log(`[ListingEngine] Confidence: ${confidenceScore}%`);
+    console.log(`[ListingEngine] Presets: sky=${lockedPresets.skyType}, twilight=${lockedPresets.twilightTone}`);
     console.log(`[ListingEngine] ========================================\n`);
     
     return {
       listingId,
       status: finalStatus,
       heroPhotoId: strategy.heroPhotoId,
-      photoResults: results,
-      totalPhotos: results.length,
+      photoResults: legacyForValidation,
+      totalPhotos: photoResults.length,
       successfulPhotos,
       failedPhotos,
       photosNeedingReview,
-      overallConfidence,
+      overallConfidence: confidenceScore,
       totalProcessingTime: totalTime,
       startedAt: new Date(startTime).toISOString(),
       completedAt: new Date().toISOString(),
@@ -312,7 +334,7 @@ async function finalizeListing(
         toolsApplied: data.toolsApplied,
         lockedPresets: data.lockedPresets,
         preparedAt: new Date().toISOString(),
-        engineVersion: '2.0.0-premium',
+        engineVersion: '3.0.0',
       },
       updated_at: new Date().toISOString(),
     })
@@ -324,7 +346,7 @@ async function finalizeListing(
 }
 
 function countToolsApplied(
-  results: Array<{ toolsApplied: string[] }>
+  results: PhotoExecutionResult[]
 ): Record<string, number> {
   const counts: Record<string, number> = {};
   
@@ -380,7 +402,7 @@ export function buildPrepareResponse(
   let message: string;
   switch (result.status) {
     case 'completed':
-      message = `Successfully prepared ${result.successfulPhotos} photos with premium engine`;
+      message = `Successfully prepared ${result.successfulPhotos} photos`;
       break;
     case 'needs_review':
       message = `Preparation complete, ${result.photosNeedingReview} photos need review`;
@@ -406,6 +428,5 @@ export * from './types';
 export { analyzePhoto, analyzePhotos } from './photo-intelligence';
 export { buildListingStrategy, getStrategySummary } from './strategy-builder';
 export { validateResult, validateResults } from './quality-validator';
-export { determineLockedPresets } from './preset-locker';
 export { multiPassTwilight } from './multi-pass-twilight';
 export { balanceWindowExposure, detectWindows } from './window-masking';
