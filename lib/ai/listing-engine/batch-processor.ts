@@ -17,6 +17,7 @@ import { ToolId, processEnhancement } from '../router';
 import { LockedPresets, getLockedPrompt } from './preset-locker';
 import { multiPassTwilight } from './multi-pass-twilight';
 import { balanceWindowExposure } from './window-masking';
+import { autoEnhance } from '../providers/autoenhance';
 import { createClient } from '@/lib/supabase/server';
 
 // ============================================
@@ -130,6 +131,28 @@ async function processPhotoWithPresets(
   console.log(`[BatchProcessor] Tools to apply:`, photo.toolOrder);
   console.log(`[BatchProcessor] Is twilight target:`, photo.isTwilightTarget);
   
+
+  // ========================================
+  // STEP 1: GLOBAL ENHANCEMENT (AutoEnhance.ai)
+  // PRD: Always runs once per photo, never replaced by Replicate
+  // ========================================
+  try {
+    console.log(`[BatchProcessor] Running AutoEnhance.ai on ${photo.photoId}`);
+    const autoEnhancedUrl = await autoEnhance(currentUrl, {
+      enhance_type: "property",
+      hdr: true,
+      denoise: true,
+      white_balance: true,
+      sharpen: true,
+    });
+    if (autoEnhancedUrl) {
+      currentUrl = autoEnhancedUrl;
+      console.log(`[BatchProcessor] ✓ AutoEnhance.ai complete for ${photo.photoId}`);
+    }
+  } catch (error: any) {
+    console.error(`[BatchProcessor] AutoEnhance.ai failed for ${photo.photoId}:`, error.message);
+    // Continue with original - AutoEnhance failure should not block pipeline
+  }
   // Process tools sequentially for this photo
   for (const tool of photo.toolOrder) {
     try {
